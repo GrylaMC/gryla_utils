@@ -1,9 +1,8 @@
-Various scripts to make things work.
+An assortment of scripts for managing the proto reverse engineering effort
 
 
 
-TODO: DOCS
-
+TODO: Script by script docs
 
 
 

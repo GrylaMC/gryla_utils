@@ -2,6 +2,10 @@
 A powerful tool for parsing packets from the Packet section of the minecraft wiki,
 originally from wiki.vg.
 
+Since to wiki tends to have many small formatting errors, AI is the most efficient way to process it. 
+
+
+
 Wiki url: https://minecraft.wiki/w/Minecraft_Wiki:Protocol_documentation
 
 Copyright (C) 2025 - PsychedelicPalimpsest
@@ -26,7 +30,136 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from typing import *
 import requests
 from dataclasses import dataclass
+from llama_cpp import Llama
+import json, time
 BASE_URL = "https://minecraft.wiki/api.php?action=query&format=json&prop=revisions&rvslots=*&rvprop=content&revids={}"
+
+SYSTEM_PROMPT = {
+    "role": "system",
+    "content": """
+You convert Minecraft Wiki packet/protocol definitions into Minecraft Protocol DSL.
+
+ABSOLUTE OUTPUT RULES
+- Output ONLY valid Minecraft Protocol DSL text.
+- Do NOT output markdown, prose, headings, or code fences.
+- If you must explain something, do it ONLY using DSL single-line comments starting with '#'.
+- Keep comments minimal: at most 1 comment line per field, and only when required by the rules below.
+
+DSL BASICS
+- Whitespace is optional.
+- Comments: '#' starts a single-line comment.
+- Strings: double quotes ". Strings may span lines; backslash escapes apply.
+- Numbers: decimal, hex (0x...), binary (0b...). Decimals like 0.1 allowed.
+- Booleans: true / false.
+- Lists: [a, b, c]
+- Dictionaries: {key: value, ...}
+- Objects: Identifier followed by optional (args) and optional attached dictionary and/or attached list:
+  Example: Foo(1, 2) {3: 4} [5, 6]
+  Example: Foo
+
+REQUIRED OUTPUT SHAPE
+- Emit exactly ONE dictionary with exactly ONE entry:
+  {
+    0xNN: Packet(optional_resource_id?) [ fields... ]
+  }
+- The dictionary key MUST be the packet ID as hexadecimal with 0x prefix, exactly as on the wiki.
+- The dictionary value MUST be a Packet object.
+- Packet arguments:
+  - Packet("resource_id") ONLY if the wiki explicitly shows a resource id for that protocol/version.
+  - Otherwise Packet has no arguments: Packet
+- Packet attached list is REQUIRED and contains the ordered list of fields.
+
+FIELDS
+- Each field is an object representing its datatype.
+- Typical form: Type("Field Name")
+- Preserve field order exactly as listed on the wiki.
+- Preserve field names exactly as shown on the wiki.
+- If the wiki does not provide a name, omit the name argument (Type) unless the datatype requires it.
+
+CHILDREN / NESTED FIELDS (DETERMINISTIC RULE)
+Some field types contain child fields ("with children").
+Encode children in ONE of these two ways:
+1) Argument form: Container(child)
+   Use ONLY when the container has exactly 1 child AND the container has no field name on the wiki.
+2) Attached list form: Container("Name") [ child1, child2, ... ]
+   Use in all other cases (including 2+ children, or container has a name).
+
+UNKNOWN TYPES
+- You may ONLY use builtin datatypes listed below.
+- If the wiki uses a datatype not in the builtin list, emit:
+  TODO("Field Name") # wiki type: <type>, describe briefly
+  Put TODO in the correct position in the fields list.
+
+STRING LENGTH RULE
+- For String(N), set N only if the wiki explicitly provides it.
+- If N is not provided, emit String("Name") and add a short comment:
+  String("Name") # max length not specified on wiki
+
+BUILTIN DATATYPES (ALLOWED)
+Boolean
+Byte
+UByte
+Short
+UShort
+Int
+Long
+Float
+Double
+String(N optional as second argument)
+TextComponent
+JsonTextComponent
+Identifier
+VarInt
+VarLong
+EntityMetadata
+Slot
+HashedSlot
+NBT
+Position
+Angle
+UUID
+BitSet
+FixedBitSet(N as second argument)
+Optional   # with children; include context in a brief comment if structure is unclear
+PrefixedOptional   # with children
+Array   # with children; add brief comment describing length/prefix if the wiki indicates it
+PrefixedArray   # with children
+Enum   # Enum("name", UnderlyingType) {numeric_or_string_key: "label", ...}
+EnumSet(N)   # if N missing: EnumSet("Name") # N not specified on wiki
+ByteArray
+IdOr(x)   # IdOr("Name", OtherType)
+IdSet
+SoundEvent
+ChatType
+TeleportFlags
+RecipeDisplay
+SlotDisplay
+ChunkData
+LightData
+Or(x, y)   # Or(TypeA("A"), TypeB("B"))
+GameProfile
+ResolvableProfile
+DebugSubscriptionEvent
+DebugSubscriptionUpdate
+LpVec3
+
+EXAMPLE (VALID)
+{
+  0x02: Packet("login_finished") [
+    UUID("UUID"),
+    String("Username"),
+    PrefixedArray("Properties") [
+      String("Name"),
+      String("Value"),
+      PrefixedOptional(String("Signature"))
+    ]
+  ]
+}
+
+"""
+    
+}
+
 
 
 
@@ -247,65 +380,6 @@ class WikiTable:
         return None if len(l) == 0 else l[0]
 
 
-
-
-
-class ProtocolNode:
-    def debug_str(self) -> str:
-        raise NotImplemented("Not implmented")
-
-class ProtocolStrType(ProtocolNode):
-
-    def __init__(self, txt : str) -> None:
-        self.txt = txt
-    def debug_str(self) -> str:
-        return self.txt
-
-class ProtocolTypeBinary(ProtocolNode):
-    def __init__(self, descriptor : ProtocolNode, content : ProtocolNode, isEnum = False) -> None:
-        self.descriptor = descriptor
-        self.content = content
-        self.isEnum = isEnum
-    def debug_str(self) -> str:
-        return self.descriptor.debug_str() + " & " + self.content.debug_str()
-
-class ProtocolAnnotation(ProtocolNode):
-    def __init__(self, annotated : ProtocolNode, annotation : str):
-        self.annotated = annotated
-        self.annotation = annotation
-    def debug_str(self) -> str:
-        return self.annotated.debug_str()
-
-class ProtocolConditionalOption(ProtocolNode):
-    def __init__(self, condition : int, content : ProtocolNode):
-        self.condition = condition
-        self.content = content
-    def debug_str(self) -> str:
-        return f"when {self.condition} : {self.content.debug_str().replace('\n', '\n\n')}"
-class ProtocolConditional(ProtocolNode):
-    def __init__(self, conditions : List[ProtocolConditionalOption]) -> None:
-        self.conditions = conditions
-
-    def debug_str(self) -> str:
-        return "{\n\t" + ("\n\t".join(
-            (f"{cond.debug_str().replace('\n', '\n\t')}" for cond in self.conditions)
-        )) + "\n}"
-
-
-
-class ProtocolList(ProtocolNode):
-
-    # A str of unresolver or primative
-    fields : List[Tuple[str, ProtocolNode]]
-
-    def __init__(self, fields):
-        self.fields = fields
-    def debug_str(self) -> str:
-        return "{\n\t" + ("\n\t".join(
-            (f"{name} : {tp.debug_str().replace('\n', '\n\t')}"   for name, tp in self.fields)
-        )) + "\n}"
-
-
 class Wiki:
     name : str
     components : List['Wiki | str']
@@ -355,460 +429,50 @@ class Wiki:
         assert type(stack[0][1]) is Wiki, "Wiki stack corruption"
         return stack[0][1]
     
+    def get(self, *args) -> 'Wiki':
+        if len(args) == 0:
+            return self
+        for c in self.components:
+            if type(c) is Wiki and c.name == args[0]:
+                return c.get(*args[1:])
+        raise KeyError(args)
 
-class SymmetryError(Exception):
-    pass
 
-class TypeGenCtx:
-    proto_version : int
-    def __init__(self, proto_version : int):
-        self.proto_version = proto_version
-    
-    def parse_type_content(self, type_content : str) -> ProtocolNode:
-        # TODO: THIS
-        return ProtocolStrType(type_content)
 
-    def parse_subtable(self, name_col : WikiTable, type_col : WikiTable, forceEnumStyleAfter : int | None = None) -> ProtocolList:
-        # Generally a, a type is symmetric across the table, with violation of this
-        # rule either being an indication of a special condition, or a formatting
-        # error on the part of the wiki editors. 
 
-        # Only check height, as width can change with Enums
-        if name_col.height != type_col.height: raise SymmetryError()
-
-        fields = []
-
-        row_itr = zip(name_col.rows, type_col.rows)
-        for name_row, type_row in row_itr:
-            if len(name_row) != len(type_row):
-                # When this happens typically there is a formatting
-                # issue on the Wiki itself, exept in the 'no fields' condition
-                if len(name_row) and name_row[0].content.strip() == "''no fields''":
-                    # Now consume N rows
-                    for _ in range(name_row[0].rowspan - 1):
-                        try: next(row_itr)
-                        except StopIteration: break
-
-                    continue
-
-                # The only time a mid-content header is seen _should_ be enums with conditional content.
-                # However some exceptional packets lack this header
-                elif len(name_row) > 1 and (
-                        name_row[0].isHeader or (
-                            forceEnumStyleAfter is not None and forceEnumStyleAfter == name_row[0].y
-                            )):
-                    enumContents = []
-                    while True:
-                        try:
-                            name_row, type_row = next(row_itr) if forceEnumStyleAfter is None else (name_row, type_row)
-                            # Evil hack
-                            forceEnumStyleAfter = None
-
-                            assert len(name_row) == 2, "We do not support an enum conditional field that is not at an end of a list, or has multiple layers (TODO)"
-                            enumContents.append(ProtocolConditionalOption(
-                                int(name_row[0].content.split(":")[0]),
-                                ProtocolAnnotation(
-
-                                        
-                                    self.parse_subtable(
-                                        name_col.subtable(name_row[1].x, name_row[1].y, height=name_row[0].rowspan),
-                                        type_col.subtable(type_row[0].x, name_row[1].y, height=name_row[0].rowspan)
-                                    ) if len(type_row) and name_row[1] != "''no fields''"
-                                      else ProtocolList([]),
-                                    name_row[0].content,
-                                )
-                            ))
-                            for _ in range(name_row[0].rowspan - 1):
-                                next(row_itr)
-
-
-                        except StopIteration:
-                            break
-                    fields.append(("Actions", ProtocolConditional(enumContents)))
-                    # Todo: Support enums that are not the end of a list
-                    break
-                else:
-                    raise SymmetryError()
-
-            if len(name_row) == 0:
-                continue
-            # Simple types
-            elif len(name_row) == 1:
-                fields.append((name_row[0].content, self.parse_type_content(type_row[0].content)))
-            else:
-                # The first elements rowspan tells us how long the recusive type is
-                if name_row[0].rowspan != type_row[0].rowspan: raise SymmetryError()
-                fields.append((
-                    name_row[0].content,
-                    ProtocolTypeBinary(
-                        self.parse_type_content(type_row[0].content),
-                        self.parse_subtable(
-                            name_col.subtable(name_row[0].colspan, name_row[0].y, height=name_row[0].rowspan),
-                            type_col.subtable(name_row[0].colspan, name_row[0].y, height=name_row[0].rowspan)
-                        )
-                    )
-                ))
-                # Now consume N rows
-                for _ in range(name_row[0].rowspan):
-                    try: next(row_itr)
-                    except StopIteration: break
-        return ProtocolList(
-           fields 
-        )
-
-class Packet:
-
-    def __init__(self, preamble : str, packetId : str, resourceId : str | None, typeDefinition : ProtocolList) -> None:
-        """
-        :param preamble: The description the wiki gives before the definition, this is often blank (zero len)
-        :param packetId: The hex byte used to identify the packet on the network
-        :param resourceid: The name Minecraft knows it by, this is absent (set to None) for older version
-        :param typeDefinition: The parsed type object for this packet 
-        """
-
-
-
-        self.preamble = preamble
-        self.packetId = packetId
-        self.resourceId = resourceId
-        self.typeDefinition = typeDefinition
-    def debug_str(self) -> str:
-        return f"# {self.preamble}]\n# {self.packetId} & {self.resourceId}\n{self.typeDefinition.debug_str()}"
-
-@dataclass
-class PacketPatch:
-    name : str
-    proto_range : range
-
-    patch_table : Callable[[WikiTable, 'PacketPatch'], WikiTable] | None = None
-    forced_version : Dict | None = None
-    post_parse_mod : Callable[[ProtocolList, WikiTable, WikiTable, Wiki, 'PacketPatch'], None] | None = None
-
-
-
-    force_enum_after : int | None = None
-
-    debug : bool = False
-    disabled : bool = False
-
-    # Use to store anything you want
-    storage : Any = None
-
-
-class PatchSet:
-    patches : List[PacketPatch]
-    name_lookup : Dict[str, List[PacketPatch]]
-    DEFAULT = PacketPatch("DEFAULT", range(0)) 
-    def __init__(self, *patches : PacketPatch) -> None:
-        self.patches = list(patches)
-        self.name_lookup = {}
-
-        for p in patches:
-            if not p.name in self.name_lookup:
-                self.name_lookup[p.name] = []
-            self.name_lookup[p.name].append(p)
-
-    def resolve_patch(self, name : str, proto : int) -> PacketPatch:
-        if not name in self.name_lookup:
-            return self.DEFAULT
-        for patch in self.name_lookup[name]:
-            if proto in patch.proto_range:
-                return patch
-        return self.DEFAULT
-
-
-def _waypoint_post_parse_patch(proto_list, table, raw_table, wiki, patch):
-    pass
-# Due to it being a wiki, not all packets are 
-# perfectly formatted. So they need patched
-PACKET_PATCHES = PatchSet(
-    # Non standered
-    PacketPatch("Player Chat Message", range(999), disabled=True),
-
-    PacketPatch("Update Teams", range(999), force_enum_after=2),
-    PacketPatch("Waypoint", range(999), 
-                patch_table=lambda table, _: table.subtable(0, 0, height=4),
-                debug=True
-
-                )
-)
-
-
-def parse_modern_packet_id(id_col : str) -> Dict[str, str]:
-    # Example packet id:
-    # ''protocol:''<br/><code>0x00</code><br/><br/>''resource:''<br/><code>intention</code>
-    # Which tend to follow the format:
-    # [''{Key}:''<br/><code>{Value}</code><br/><br/>]
-
-    ret = {}
-    txt = id_col
-
-
-    # Fix for: Legacy Server List Ping
-    # Likely to be seen earlier
-    if id_col.startswith("0x"):
-        return {"protocol": id_col}
-
-
-
-    while txt:
-        assert txt.startswith("''"), f"Packet id format error, see: {id_col}"
-        txt = txt[2:]
-        nameEnd = txt.find(":''")
-
-        assert nameEnd != -1
-
-        name = txt[:nameEnd]
-        
-        # Skip br
-        txt = txt[txt.find(">") +1: ]
-
-        assert txt.startswith("<code>")
-        txt = txt[len("<code>"):]
-        value = txt[:txt.find("<")]
-
-
-        # Skip to </code>
-        txt = txt[txt.find(">") +1: ]
-        while txt and txt.startswith("<br"):
-            # Skip brs
-            txt = txt[txt.find(">") +1: ]
-
-        ret[name] = value
-    return ret
-
-
-
-def modern_packet_parse(packet : Wiki, ctx : TypeGenCtx) -> Packet:
-    assert len(packet.components)
-
-    patch = PACKET_PATCHES.resolve_patch(packet.name, ctx.proto_version)
-
-
-
-    txt = packet.components[0]
-    name = packet.name
-
-    assert type(txt) is str
-
-    preamble = ""
-    
-    # Create the preamble and seek txt to first table
-    while txt:
-        line, head = consume_line(txt)
-
-        if line.startswith("{|"):
-            break
-
-        txt = head
-        preamble += line + "\n"
-
-    if txt is None or not len(txt):
-        raise Exception(f"Cannot find packet table for {packet.name}. Intervention required!")
-
-    packetTableRaw, txt = WikiTable.From_txt(txt)
-    packetTable = packetTableRaw
-    
-    if patch.patch_table:
-        packetTable = patch.patch_table(packetTable, patch)
-
-
-    if packetTable.get(0, 0).content.strip() != "Packet ID":
-        raise Exception(f"Packet {packet.name} not of expected packet table format. Intervention required!")
-    
-    packetId = (
-        parse_modern_packet_id(packetTable.get(0, 1).content)
-        if patch.forced_version is None
-        else patch.forced_version
-    )
-
-    assert "protocol" in packetId
-
-
-
-    if patch.disabled:
-        p = Packet(
-            "DISABLED WIKI PACKET", 
-            packetId["protocol"],
-            packetId.get("resource"),
-            ProtocolList([])
-        )
-        if patch.debug: print(p.debug_str())
-        return p
-
-
-
-    nameHeader = packetTable.search_headers(lambda cont: cont.strip() == "Field Name")
-    typeHeader = packetTable.search_headers(lambda cont: cont.strip() == "Field Type")
-
-
-    assert 1 == len(nameHeader)
-    assert 1 == len(typeHeader)
-
-    nameCol = packetTable.subtable(nameHeader[0].x, 1, width=nameHeader[0].colspan)
-    typeCol = packetTable.subtable(typeHeader[0].x, 1, width=typeHeader[0].colspan)
-
-    try:
-        packetType = ctx.parse_subtable(nameCol, typeCol, forceEnumStyleAfter=patch.force_enum_after)
-    except SymmetryError as e: 
-        print(f"Symmetry error in packet {packet.name}. Intervention required!")
-        print(packet.components[0])
-        print("\n\n")
-        return None
- #       raise e
-    except Exception as e:
-        print(f"Unknown exception condition in {packet.name}. Intervention required!")
-        raise e
-   
-
-    if patch.post_parse_mod:
-        patch.post_parse_mod(packetType, packetTable, packetTableRaw, packet, patch)
-
-
-    p = Packet(
-        preamble,
-        packetId["protocol"],
-        packetId.get("resource"),
-        packetType
-    )
-
-
-
-
-    if patch.debug: print(p.debug_str())
-    return p
-
-
-
-
-
-
-MODERN_WIKI_WHITELIST = ["Status", "Login", "Handshaking", "Configuration", "Play"]        
-MODERN_WIKI_IGNORELIST = ["Definitions", "Packet format", "Navigation"]
-def modern_wiki_parse(root : Wiki, proto_version : int):
-    assert root.name == "root"
-
-    ctx = TypeGenCtx(proto_version)
-
-    for packet_mode_tree in root.components:
-        if type(packet_mode_tree) is str:
-            continue
-
-        if packet_mode_tree.name in MODERN_WIKI_IGNORELIST:
-            continue
-
-        if not packet_mode_tree.name in MODERN_WIKI_WHITELIST:
-            # We only allow defined headers to ENSURE we understand what we are doing
-            raise Exception(f"Unknown wiki header '{packet_mode_tree.name}'")
-
-        packet_mode_ret = {}
-
-        for destination in packet_mode_tree.components:
-            if type(destination) is str:
-                continue
-        
-            assert destination.name in ["Clientbound", "Serverbound"], f"Unknown destination {destination.name}"
-
-            packet_wikis : List[Wiki] = [c for c in destination.components if type(c) is not str]
-            
-            packets = [modern_packet_parse(w, ctx) for w in packet_wikis]
-             
-
-
-                        
-            
-    
-            
-        
-        
-        
-
-
-
-
-   
-
-
-test = """
-{| class="wikitable"
-! Packet ID
-! State
-! Bound To
-! colspan="2"| Field Name
-! colspan="2"| Field Type
-! Notes
-|-
-| rowspan="15"| ''protocol:''<br/><code>0x2D</code><br/><br/>''resource:''<br/><code>merchant_offers</code>
-| rowspan="15"| Play
-| rowspan="15"| Client
-| colspan="2"| Window ID
-| colspan="2"| {{Type|VarInt}}
-| The ID of the window that is open; this is an int rather than a byte.
-|-
-| rowspan="10"| Trades
-| Input item 1
-| rowspan="10"| {{Type|Prefixed Array}}
-| Trade Item
-| See below. The first item the player has to supply for this villager trade. The count of the item stack is the default "price" of this trade.
-|-
-| Output item
-| {{Type|Slot}}
-| The item the player will receive from this villager trade.
-|-
-| Input item 2
-| {{Type|Prefixed Optional}} Trade Item
-| The second item the player has to supply for this villager trade.
-|-
-| Trade disabled
-| {{Type|Boolean}}
-| True if the trade is disabled; false if the trade is enabled.
-|-
-| Number of trade uses
-| {{Type|Int}}
-| Number of times the trade has been used so far. If equal to the maximum number of trades, the client will display a red X.
-|-
-| Maximum number of trade uses
-| {{Type|Int}}
-| Number of times this trade can be used before it's exhausted.
-|-
-| XP
-| {{Type|Int}}
-| Amount of XP the villager will earn each time the trade is used.
-|-
-| Special Price
-| {{Type|Int}}
-| Can be zero or negative. The number is added to the price when an item is discounted due to player reputation or other effects.
-|-
-| Price Multiplier
-| {{Type|Float}}
-| Can be low (0.05) or high (0.2). Determines how much demand, player reputation, and temporary effects will adjust the price.
-|-
-| Demand
-| {{Type|Int}}
-| If positive, causes the price to increase. Negative values seem to be treated the same as zero.
-|-
-| colspan="2"| Villager level
-| colspan="2"| {{Type|VarInt}}
-| Appears on the trade GUI; meaning comes from the translation key <code>merchant.level.</code> + level.
-1: Novice, 2: Apprentice, 3: Journeyman, 4: Expert, 5: Master.
-|-
-| colspan="2"| Experience
-| colspan="2"| {{Type|VarInt}}
-| Total experience for this villager (always 0 for the wandering trader).
-|-
-| colspan="2"| Is regular villager
-| colspan="2"| {{Type|Boolean}}
-| True if this is a regular villager; false for the wandering trader.  When false, hides the villager level and some other GUI elements.
-|-
-| colspan="2"| Can restock
-| colspan="2"| {{Type|Boolean}}
-| True for regular villagers and false for the wandering trader. If true, the "Villagers restock up to two times per day." message is displayed when hovering over disabled trades.
-|}
-"""
 
 if __name__ == "__main__":
+    llm = Llama.from_pretrained(
+        repo_id="mistralai/Ministral-3-3B-Instruct-2512-GGUF",
+        filename="Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+        n_ctx=2048,
+        verbose=False
+    )
+    #
+    # llm = Llama.from_pretrained(
+    #     repo_id="microsoft/Phi-3-mini-4k-instruct-gguf",
+    #     filename="Phi-3-mini-4k-instruct-q4.gguf",
+    #     n_ctx=4096,
+    #     verbose=False
+    # )
+
+
     wiki = Wiki.From_oldid(3024144)
-    modern_wiki_parse(wiki, 772)
+    cont = wiki.get("Login", "Clientbound", "Encryption Request").components[0]
+
+    t = time.time()
+
+    ret = llm.create_chat_completion(messages=[
+       SYSTEM_PROMPT,
+        {
+            "role": "user",
+            "content": "Convert: ```" + cont + "```",
+        },
+    ])
+    content = ret["choices"][0]['message']["content"]
+    print(content)
+
+    print(time.time() - t)
     # wiki.parse_datatypes()
     # ctx = TypeGenCtx()
     #tbl = WikiTable.From_txt(test)

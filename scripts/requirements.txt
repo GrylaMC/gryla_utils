@@ -1,2 +1,3 @@
 bs4
 requests
+huggingface_hub

@@ -65,36 +65,6 @@ def get_storage_dir() -> str:
     # Fallback if unknown system
     raise RuntimeError(f"Cannot determine cache directory on {os_name}")
 
-def get_java_major_version():
-    try:
-        result = subprocess.run(
-            ["java", "--version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=True,
-        )
-    except FileNotFoundError:
-        raise RuntimeError("Java not installed or not in PATH")
-
-    first_line = result.stdout.splitlines()[0].strip()
-
-    # Find something like "21.0.1" or "1.8.0_371"
-    m = re.search(r'(\d+)(?:\.(\d+))?', first_line)
-    if not m:
-        raise RuntimeError("Could not parse Java version from: " + first_line)
-
-    major = int(m.group(1))
-    minor = m.group(2)
-
-    # Handle the legacy "1.x" versions (Java <= 8)
-    if major == 1 and minor is not None:
-        major = int(minor)
-
-    return major
-def verify_java() -> bool:
-    return get_java_major_version() > MIN_JAVA_VERSION
-
 def sizeof_fmt(num, suffix="B"):
     # http://stackoverflow.com/questions/1094841/ddg#1094933
     for unit in ("", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"):
@@ -214,7 +184,7 @@ def download_mojang_file(versions_id : str, target : str, output : str | None, d
         exit(1)
     download_json = downloads[target]
 
-    output : str = output if output is not None else download_json["url"].split("/")[-1] 
+    output  = output if output is not None else download_json["url"].split("/")[-1] 
 
     if do_log:
         print(f"Downloading {output}")
@@ -339,9 +309,6 @@ def main():
     if len(sys.argv) == 1 or sys.argv[1] in ["-h", "--help", "help"]:
         print_help()
         exit(0)
-    if not verify_java():
-        print(f"Error: please install java {MIN_JAVA_VERSION} or later!")
-        exit(1)
     if not os.path.exists(CFR):
         print("Downloading cfr!")
         download_file(CFR_URL, CFR)

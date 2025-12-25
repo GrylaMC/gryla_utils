@@ -27,16 +27,24 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
 
+
+from dotenv import load_dotenv
+
 from typing import *
+import os
 import requests
 from dataclasses import dataclass
-from llama_cpp import Llama
-import json, time
+import time
+from google import genai
+from google.genai import types
+
 BASE_URL = "https://minecraft.wiki/api.php?action=query&format=json&prop=revisions&rvslots=*&rvprop=content&revids={}"
 
-SYSTEM_PROMPT = {
-    "role": "system",
-    "content": """
+
+
+
+
+SYSTEM_PROMPT = """
 You convert Minecraft Wiki packet/protocol definitions into Minecraft Protocol DSL.
 
 ABSOLUTE OUTPUT RULES
@@ -136,12 +144,14 @@ RecipeDisplay
 SlotDisplay
 ChunkData
 LightData
-Or(x, y)   # Or(TypeA("A"), TypeB("B"))
+Or(x, y)  ANY TIME YOUT USE AN `Or`, IT MUST BE EXPLAINED IN A COMMENT  # Or(TypeA("A"), TypeB("B"))
 GameProfile
 ResolvableProfile
 DebugSubscriptionEvent
 DebugSubscriptionUpdate
 LpVec3
+Object
+
 
 EXAMPLE (VALID)
 {
@@ -156,9 +166,15 @@ EXAMPLE (VALID)
   ]
 }
 
+Notes:
+`VarInt Enum` turns into `Enum("Name", VarInt){...}`
+Comments are for describing how the protocol works, they should be MINIMIZED, not what each feild does (unless told overwise by the above)
+Enum values should be lowercase, with spaces between words
+When a Packet refers to another datatype that you can see the definition of, inline it.
+If you ever feel what you have written might not work in the real world, put the comment "LOW CONFIDENCE: {your confidence rating}%" at the end.
+
 """
     
-}
 
 
 
@@ -442,12 +458,9 @@ class Wiki:
 
 
 if __name__ == "__main__":
-    llm = Llama.from_pretrained(
-        repo_id="mistralai/Ministral-3-3B-Instruct-2512-GGUF",
-        filename="Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
-        n_ctx=2048,
-        verbose=False
-    )
+    load_dotenv()
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
     #
     # llm = Llama.from_pretrained(
     #     repo_id="microsoft/Phi-3-mini-4k-instruct-gguf",
@@ -458,19 +471,19 @@ if __name__ == "__main__":
 
 
     wiki = Wiki.From_oldid(3024144)
-    cont = wiki.get("Login", "Clientbound", "Encryption Request").components[0]
+    cont = wiki.get("Play", "Clientbound", "Player Info Update").components[0]
 
     t = time.time()
 
-    ret = llm.create_chat_completion(messages=[
-       SYSTEM_PROMPT,
-        {
-            "role": "user",
-            "content": "Convert: ```" + cont + "```",
-        },
-    ])
-    content = ret["choices"][0]['message']["content"]
-    print(content)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+        ),
+        contents="Convert: ```" + cont + "```",
+    )
+
+    print(response.text)
 
     print(time.time() - t)
     # wiki.parse_datatypes()

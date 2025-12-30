@@ -33,14 +33,13 @@ import hashlib
 
 MIN_JAVA_VERSION = 16
 CFR_URL = "https://www.benf.org/other/cfr/cfr-0.152.jar"
-REMAPPER_URL = "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.11.2/tiny-remapper-0.11.2-fat.jar" 
+REMAPPER_URL = "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.11.2/tiny-remapper-0.11.2-fat.jar"
 
 VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest.json"
 
 
 YARN_FABRIC_BASE = "https://maven.fabricmc.net/net/fabricmc/yarn/"
 YARN_LEGACY_BASE = "https://repo.legacyfabric.net/legacyfabric/net/legacyfabric/yarn/"
-
 
 
 def get_storage_dir() -> str:
@@ -65,6 +64,7 @@ def get_storage_dir() -> str:
     # Fallback if unknown system
     raise RuntimeError(f"Cannot determine cache directory on {os_name}")
 
+
 def sizeof_fmt(num, suffix="B"):
     # http://stackoverflow.com/questions/1094841/ddg#1094933
     for unit in ("", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"):
@@ -73,7 +73,8 @@ def sizeof_fmt(num, suffix="B"):
         num /= 1024.0
     return f"{num:.1f}Yi{suffix}"
 
-def download_file(url : str, outpath : str, output=True):
+
+def download_file(url: str, outpath: str, output=True):
     resp = request("GET", url, preload_content=False, decode_content=False)
     if resp.status != 200:
         raise ConnectionError(f"ERROR: cannot fetch {url}")
@@ -83,7 +84,7 @@ def download_file(url : str, outpath : str, output=True):
         total = sizeof_fmt(int(total))
 
     ending = ("/" + total) if total is not None else " downloaded"
-        
+
     last_write = ""
 
     if output:
@@ -107,7 +108,7 @@ def download_file(url : str, outpath : str, output=True):
             s += " " * (len(last_write) - len(s))
         sys.stdout.write(s + "\n")
     resp.close()
-        
+
 
 STORAGE_DIR = get_storage_dir()
 os.makedirs(STORAGE_DIR, exist_ok=True)
@@ -115,14 +116,19 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 CFR = os.path.join(STORAGE_DIR, "cfr.jar")
 REMAPPER = os.path.join(STORAGE_DIR, "tinyremapper.jar")
 
-MAPPINGIO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deps", "mapping-io-cli-0.3.0-all.jar")
+MAPPINGIO = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "deps",
+    "mapping-io-cli-0.3.0-all.jar",
+)
 
 MODERN_YARN_CACHE = os.path.join(STORAGE_DIR, "modern_yarn.json")
 LEGACY_YARN_CACHE = os.path.join(STORAGE_DIR, "lagacy_yarn.json")
 
 VERSION_MANIFEST_CACHE = os.path.join(STORAGE_DIR, "version_manifest.json")
 
-def _get_yarn_versions(url : str):
+
+def _get_yarn_versions(url: str):
     resp = request("GET", url)
     root = ET.fromstring(resp.data)
     versions = root[2][2]
@@ -132,6 +138,7 @@ def _get_yarn_versions(url : str):
 
 def get_modern_yarn_versions_web():
     return _get_yarn_versions(YARN_FABRIC_BASE + "maven-metadata.xml")
+
 
 def get_legacy_yarn_versions_web():
     return _get_yarn_versions(YARN_LEGACY_BASE + "maven-metadata.xml")
@@ -147,22 +154,27 @@ def get_modern_yarn_versions_cached():
         json.dump(vers, f, indent=1)
     return vers
 
+
 def get_legacy_yarn_versions_cached():
     if os.path.exists(LEGACY_YARN_CACHE):
         with open(LEGACY_YARN_CACHE, "r") as f:
-            return json.load(f)
+        return json.load(f)
 
     vers = get_legacy_yarn_versions_web()
     with open(LEGACY_YARN_CACHE, "w") as f:
         json.dump(vers, f, indent=1)
     return vers
 
+
 def get_manifest_cache():
     assert os.path.exists(VERSION_MANIFEST_CACHE)
     with open(VERSION_MANIFEST_CACHE, "r") as f:
         return json.load(f)
 
-def download_mojang_file(versions_id : str, target : str, output : str | None, do_log=True):
+
+def download_mojang_file(
+    versions_id: str, target: str, output: str | None, do_log=True
+):
     vers = get_manifest_cache()["versions"]
     version = None
     for v in vers:
@@ -177,14 +189,15 @@ def download_mojang_file(versions_id : str, target : str, output : str | None, d
 
     target = target
 
-
     downloads = json.loads(resp.data)["downloads"]
     if not target in downloads:
-        print(f"ERROR: cannot download '{target}', the valid options for this version are: {', '.join(downloads.keys())}")
+        print(
+            f"ERROR: cannot download '{target}', the valid options for this version are: {', '.join(downloads.keys())}"
+        )
         exit(1)
     download_json = downloads[target]
 
-    output  = output if output is not None else download_json["url"].split("/")[-1] 
+    output = output if output is not None else download_json["url"].split("/")[-1]
 
     if do_log:
         print(f"Downloading {output}")
@@ -209,19 +222,35 @@ def download_mojang_file(versions_id : str, target : str, output : str | None, d
         if do_log:
             print("Verified!")
 
-def _get_most_recent_yarn(version_id : str):
-    modern = sorted([v for v in get_modern_yarn_versions_cached() if v.startswith(version_id + "+build")], key=lambda x: x.split(".")[-1].zfill(3))
+
+def _get_most_recent_yarn(version_id: str):
+    modern = sorted(
+        [
+            v
+            for v in get_modern_yarn_versions_cached()
+            if v.startswith(version_id + "+build")
+        ],
+        key=lambda x: x.split(".")[-1].zfill(3),
+    )
     if len(modern):
-        ver = modern[-1] 
+        ver = modern[-1]
         return f"{YARN_FABRIC_BASE}{ver}/yarn-{ver}-tiny.gz"
-    legacy = sorted([v for v in get_legacy_yarn_versions_cached() if v.startswith(version_id + "+build")], key=lambda x: x.split(".")[-1].zfill(3))
+    legacy = sorted(
+        [
+            v
+            for v in get_legacy_yarn_versions_cached()
+            if v.startswith(version_id + "+build")
+        ],
+        key=lambda x: x.split(".")[-1].zfill(3),
+    )
     if len(legacy):
-        ver = legacy[-1] 
+        ver = legacy[-1]
         return f"{YARN_LEGACY_BASE}{ver}/yarn-{ver}-tiny.gz"
     print(f"ERROR: unable to get yarn for version {version_id}")
     exit(1)
 
-def get_yarn_tiny(version_id : str):
+
+def get_yarn_tiny(version_id: str):
     output = os.path.join(STORAGE_DIR, f"yarn.{version_id}.tiny")
     if os.path.exists(output):
         return output
@@ -231,54 +260,70 @@ def get_yarn_tiny(version_id : str):
         f.write(gzip.decompress(resp.data))
     return output
 
-    
 
-
-def get_mapped_jar(version_id : str, target : str, mapping : str, output : str, fromMapping = "official", toMapping = "named"):
+def get_mapped_jar(
+    version_id: str,
+    target: str,
+    mapping: str,
+    output: str,
+    fromMapping="official",
+    toMapping="named",
+):
+    print(version_id, target, mapping, output)
+    exit(1)
     assert target in ["server", "client"]
 
-    
     temp_raw = target + ".raw.jar"
     download_mojang_file(version_id, target, temp_raw)
 
     tiny = get_yarn_tiny(version_id)
 
     print("Remapping")
-    
-    resp = subprocess.Popen(["java", "-jar", REMAPPER,
-                             temp_raw, output, tiny, fromMapping, toMapping]) 
+
+    resp = subprocess.Popen(
+        ["java", "-jar", REMAPPER, temp_raw, output, tiny, fromMapping, toMapping]
+    )
 
     resp.wait()
 
 
-def get_mojang_txt(version_id : str, target : str) -> str:
+def get_mojang_txt(version_id: str, target: str) -> str:
     assert target in ["client", "server"]
 
     mojmap = os.path.join(STORAGE_DIR, f"mojmap.{version_id}.{target}.txt")
 
-    download_mojang_file(version_id, target+"_mappings", mojmap)
-
+    download_mojang_file(version_id, target + "_mappings", mojmap)
 
     return mojmap
 
-def get_mojang_tiny(version_id : str, target : str) -> str:
+
+def get_mojang_tiny(version_id: str, target: str) -> str:
     out = os.path.join(STORAGE_DIR, f"mojmap.{version_id}.{target}.tiny")
     if os.path.exists(out):
         return out
 
     mojmap = get_mojang_txt(version_id, target)
 
-
-    p = subprocess.Popen([
-        "java", "-jar", MAPPINGIO,
-        "convert", mojmap, out, "TINY_2", 
-    ], stdout=subprocess.PIPE)
+    p = subprocess.Popen(
+        [
+            "java",
+            "-jar",
+            MAPPINGIO,
+            "convert",
+            mojmap,
+            out,
+            "TINY_2",
+        ],
+        stdout=subprocess.PIPE,
+    )
     if p.wait() != 0:
         exit(1)
     return out
 
+
 def print_help():
-    print("""usage: python mc.py [mode] [operands]
+    print(
+        """usage: python mc.py [mode] [operands]
 Valid modes:
     help - Display this screen
     clear_cache - Remove all the cache for: Modern yarn, Legacy yarn, cfr.java, tiny remapper, and the minecraft version manifest.
@@ -293,9 +338,9 @@ Valid modes:
             Usage: python mc.py get_jar version [client/server/windows_server] [output]
 
     get_mapped_jar - Download and remap a jar from mojang
-            Usage: python mc.py get_mapped_jar client/server [mapping] [output] 
+            Usage: python mc.py get_mapped_jar version client/server [mapping] [output] 
 
-            Mapping: Use either mojang, yarn, or mcp. 
+            Mapping: Use either mojang or yarn. 
 
     get_source_jar - Download and decompile a jar
             Usage: python mc.py get_source_jar client/server [mapping] [output] 
@@ -303,8 +348,10 @@ Valid modes:
             Mapping: Use either mojang, yarn, or mcp. 
 
 
-    """)
-    
+    """
+    )
+
+
 def main():
     if len(sys.argv) == 1 or sys.argv[1] in ["-h", "--help", "help"]:
         print_help()
@@ -315,7 +362,6 @@ def main():
     if not os.path.exists(REMAPPER):
         print("Downloader tiny remapper!")
         download_file(REMAPPER_URL, REMAPPER)
-
 
     if not os.path.exists(MODERN_YARN_CACHE):
         print("Building yarn cache")
@@ -348,35 +394,28 @@ def main():
             print("Missing argument: version")
             exit(1)
 
-        download_mojang_file(sys.argv[2], "client" if len(sys.argv) == 3 else sys.argv[3], None if sys.argv != 5 else sys.argv[4])
+        download_mojang_file(
+            sys.argv[2],
+            "client" if len(sys.argv) == 3 else sys.argv[3],
+            None if len(sys.argv) != 5 else sys.argv[4],
+        )
 
     elif sys.argv[1] == "cfr":
         subprocess.run(["java", "-jar", CFR, *sys.argv[2:]])
 
     elif sys.argv[1] == "get_mapped_jar":
-
-        print(get_mojang_tiny("1.21.3", "client"))
-        pass
-#        get_mapped_jar("1.8.5", "client", "yarn", "mapped.jar")
-   
-
-
-                
+        get_mapped_jar(
+            sys.argv[2],
+            "client" if len(sys.argv) <= 3 else sys.argv[3],
+            "yarn" if len(sys.argv) <= 4 else sys.argv[4],
+            "mapped.jar" if len(sys.argv) <= 5 else sys.argv[5],
+        )
 
     else:
         print(f"Unknown mode '{sys.argv[1]}'")
         print_help()
         exit(1)
 
-    
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-

@@ -38,6 +38,10 @@ import time
 from google import genai
 from google.genai import types
 
+
+load_dotenv()
+
+
 BASE_URL = "https://minecraft.wiki/api.php?action=query&format=json&prop=revisions&rvslots=*&rvprop=content&revids={}"
 
 
@@ -45,136 +49,8 @@ BASE_URL = "https://minecraft.wiki/api.php?action=query&format=json&prop=revisio
 
 
 SYSTEM_PROMPT = """
-You convert Minecraft Wiki packet/protocol definitions into Minecraft Protocol DSL.
-
-ABSOLUTE OUTPUT RULES
-- Output ONLY valid Minecraft Protocol DSL text.
-- Do NOT output markdown, prose, headings, or code fences.
-- If you must explain something, do it ONLY using DSL single-line comments starting with '#'.
-- Keep comments minimal: at most 1 comment line per field, and only when required by the rules below.
-
-DSL BASICS
-- Whitespace is optional.
-- Comments: '#' starts a single-line comment.
-- Strings: double quotes ". Strings may span lines; backslash escapes apply.
-- Numbers: decimal, hex (0x...), binary (0b...). Decimals like 0.1 allowed.
-- Booleans: true / false.
-- Lists: [a, b, c]
-- Dictionaries: {key: value, ...}
-- Objects: Identifier followed by optional (args) and optional attached dictionary and/or attached list:
-  Example: Foo(1, 2) {3: 4} [5, 6]
-  Example: Foo
-
-REQUIRED OUTPUT SHAPE
-- Emit exactly ONE dictionary with exactly ONE entry:
-  {
-    0xNN: Packet(optional_resource_id?) [ fields... ]
-  }
-- The dictionary key MUST be the packet ID as hexadecimal with 0x prefix, exactly as on the wiki.
-- The dictionary value MUST be a Packet object.
-- Packet arguments:
-  - Packet("resource_id") ONLY if the wiki explicitly shows a resource id for that protocol/version.
-  - Otherwise Packet has no arguments: Packet
-- Packet attached list is REQUIRED and contains the ordered list of fields.
-
-FIELDS
-- Each field is an object representing its datatype.
-- Typical form: Type("Field Name")
-- Preserve field order exactly as listed on the wiki.
-- Preserve field names exactly as shown on the wiki.
-- If the wiki does not provide a name, omit the name argument (Type) unless the datatype requires it.
-
-CHILDREN / NESTED FIELDS (DETERMINISTIC RULE)
-Some field types contain child fields ("with children").
-Encode children in ONE of these two ways:
-1) Argument form: Container(child)
-   Use ONLY when the container has exactly 1 child AND the container has no field name on the wiki.
-2) Attached list form: Container("Name") [ child1, child2, ... ]
-   Use in all other cases (including 2+ children, or container has a name).
-
-UNKNOWN TYPES
-- You may ONLY use builtin datatypes listed below.
-- If the wiki uses a datatype not in the builtin list, emit:
-  TODO("Field Name") # wiki type: <type>, describe briefly
-  Put TODO in the correct position in the fields list.
-
-STRING LENGTH RULE
-- For String(N), set N only if the wiki explicitly provides it.
-- If N is not provided, emit String("Name") and add a short comment:
-  String("Name") # max length not specified on wiki
-
-BUILTIN DATATYPES (ALLOWED)
-Boolean
-Byte
-UByte
-Short
-UShort
-Int
-Long
-Float
-Double
-String(N optional as second argument)
-TextComponent
-JsonTextComponent
-Identifier
-VarInt
-VarLong
-EntityMetadata
-Slot
-HashedSlot
-NBT
-Position
-Angle
-UUID
-BitSet
-FixedBitSet(N as second argument)
-Optional   # with children; include context in a brief comment if structure is unclear
-PrefixedOptional   # with children
-Array   # with children; add brief comment describing length/prefix if the wiki indicates it
-PrefixedArray   # with children
-Enum   # Enum("name", UnderlyingType) {numeric_or_string_key: "label", ...}
-EnumSet(N)   # if N missing: EnumSet("Name") # N not specified on wiki
-ByteArray
-IdOr(x)   # IdOr("Name", OtherType)
-IdSet
-SoundEvent
-ChatType
-TeleportFlags
-RecipeDisplay
-SlotDisplay
-ChunkData
-LightData
-Or(x, y)  ANY TIME YOUT USE AN `Or`, IT MUST BE EXPLAINED IN A COMMENT  # Or(TypeA("A"), TypeB("B"))
-GameProfile
-ResolvableProfile
-DebugSubscriptionEvent
-DebugSubscriptionUpdate
-LpVec3
-Object
-
-
-EXAMPLE (VALID)
-{
-  0x02: Packet("login_finished") [
-    UUID("UUID"),
-    String("Username"),
-    PrefixedArray("Properties") [
-      String("Name"),
-      String("Value"),
-      PrefixedOptional(String("Signature"))
-    ]
-  ]
-}
-
-Notes:
-`VarInt Enum` turns into `Enum("Name", VarInt){...}`
-Comments are for describing how the protocol works, they should be MINIMIZED, not what each feild does (unless told overwise by the above)
-Enum values should be lowercase, with spaces between words
-When a Packet refers to another datatype that you can see the definition of, inline it.
-If you ever feel what you have written might not work in the real world, put the comment "LOW CONFIDENCE: {your confidence rating}%" at the end.
 
 """
-    
 
 
 
@@ -457,8 +333,10 @@ class Wiki:
 
 
 
+
+
+
 if __name__ == "__main__":
-    load_dotenv()
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
     #
@@ -471,12 +349,13 @@ if __name__ == "__main__":
 
 
     wiki = Wiki.From_oldid(3024144)
-    cont = wiki.get("Play", "Clientbound", "Player Info Update").components[0]
+    cont = wiki.get("Play", "Clientbound", "Initialize World Border").components[0]
+    print(cont)
 
     t = time.time()
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3-flash-preview",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
         ),

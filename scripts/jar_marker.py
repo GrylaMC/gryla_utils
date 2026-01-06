@@ -189,7 +189,7 @@ def taint_jar(input_jar_path, output_jar_path):
 
 # --- PHASE 2: EXTRACTION ---
 
-def generate_tiny(remapped_jar_path, output_tiny_path):
+def generate_tiny(remapped_jar_path, output_tiny_path, remove_identical_members : bool = False):
     print(f"[*] Analyzing {remapped_jar_path} -> {output_tiny_path}")
     
     tiny_lines = ["v1\tofficial\tnamed"]
@@ -244,8 +244,10 @@ def generate_tiny(remapped_jar_path, output_tiny_path):
                         if isinstance(insn, FieldInsnNode):
                             mapped_f_name = insn.name
                             orig_f_data = REGISTRY["fields"].get(f_uid)
-                            
+
                             if orig_f_data:
+                                if remove_identical_members and orig_f_data['name'] == mapped_f_name:
+                                    break
                                 fields+=1
                                 tiny_lines.append(
                                     f"FIELD\t{original_c_name}\t{orig_f_data['desc']}\t{orig_f_data['name']}\t{mapped_f_name}"
@@ -261,6 +263,11 @@ def generate_tiny(remapped_jar_path, output_tiny_path):
                         m_uid = str(insn.cst)
                         if m_uid in REGISTRY["methods"]:
                             orig_m_data = REGISTRY["methods"][m_uid]
+
+                            if remove_identical_members and orig_m_data['name'] == method.name:
+                                break
+
+
                             methods+=1
                             tiny_lines.append(
                                 f"METHOD\t{original_c_name}\t{orig_m_data['desc']}\t{orig_m_data['name']}\t{method.name}"

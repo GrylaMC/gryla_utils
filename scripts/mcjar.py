@@ -22,6 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from hashlib import sha256
 import json
+import functools
 import subprocess
 from typing import cast
 from urllib3 import request
@@ -33,7 +34,10 @@ import platform
 CFR_URL = "https://www.benf.org/other/cfr/cfr-0.152.jar"
 REMAPPER_URL = "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.11.2/tiny-remapper-0.11.2-fat.jar"
 
+
 VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest.json"
+# Has more than the regular mojang manifest
+OMNI_VERSION_MANIFEST_URL = "https://meta.omniarchive.uk/v1/manifest.json"
 
 
 YARN_FABRIC_BASE = "https://maven.fabricmc.net/net/fabricmc/yarn/"
@@ -154,6 +158,7 @@ def download_cached(url: str, file_name: str) -> str:
 CRF = download_cached(CFR_URL, "cfr.jar")
 REMAPPER = download_cached(REMAPPER_URL, "remapper.jar")
 VERSION_MANIFEST = download_cached(VERSION_MANIFEST_URL, "version_manifest.json")
+OMNI_VERSION_MANIFEST = download_cached(OMNI_VERSION_MANIFEST_URL, "omni_version_manifest.json")
 
 
 def _get_yarn_versions(url: str) -> list[str]:
@@ -182,12 +187,17 @@ def get_legacy_yarn_versions() -> list[str]:
     return _get_yarn_versions(YARN_LEGACY_BASE + "maven-metadata.xml")
 
 
-def get_piston_file(version_id: str, target: str) -> str:
-    cache_key = sha256(f"PISTON: '{version_id}' : {target}".encode("utf-8")).hexdigest()
+def get_piston_json_path(version_id: str):
+    cache_key = sha256(f"PISTON MANIFEST: '{version_id}'".encode("utf-8")).hexdigest()
     if path := get_cached_file(cache_key):
         return path
 
-    versions = json.load(open(VERSION_MANIFEST))["versions"]
+    is_omni = False
+    if version_id.startswith("@omni@"):
+        is_omni=True
+        version_id = version_id[len("@omni@"):]
+
+    versions = json.load(open(OMNI_VERSION_MANIFEST if is_omni else VERSION_MANIFEST))["versions"]
     version = None
     for v in versions:
         if v["id"] == version_id:
@@ -198,8 +208,24 @@ def get_piston_file(version_id: str, target: str) -> str:
 
     resp = request("GET", version["url"])
     assert resp.status == 200, "Piston server error"
-    downloads = json.loads(resp.data)["downloads"]
 
+    path = make_cache_file(cache_key, "client.json")
+    with open(path, "wb") as f:
+        f.write(resp.data)
+
+    return path
+
+
+def get_piston_file(version_id: str, target: str) -> str:
+    cache_key = sha256(f"PISTON: '{version_id}' : {target}".encode("utf-8")).hexdigest()
+    if path := get_cached_file(cache_key):
+        return path
+
+    with open(get_piston_json_path(version_id)) as f:
+        downloads = json.load(f)["downloads"]
+
+    if target.startswith("@omni@"):
+        target = target[len("@omni@"):]
     if not target in downloads:
         raise IndexError(f"Unable to find '{target}' in {', '.join(downloads.keys())}")
     url = downloads[target]["url"]
@@ -284,41 +310,35 @@ def map_jar_with_tiny(
     to_ns="named",
 ):
     key = sha256(
-        f"MAP_TINY: {(dst_jar_file_name, src_jar, mapping, from_ns, to_ns)}".encode("utf-8")
+        f"MAP_TINY: {(dst_jar_file_name, src_jar, mapping, from_ns, to_ns)}".encode(
+            "utf-8"
+        )
     ).hexdigest()
 
     if path := get_cached_file(key):
         return path
     dst_out = make_cache_file(key, dst_jar_file_name)
 
-
     p = subprocess.Popen(
-        [
-            "java",
-            "-jar",
-            REMAPPER,
-            src_jar,
-            dst_out,
-            mapping,
-            from_ns,
-            to_ns
-        ],
+        ["java", "-jar", REMAPPER, src_jar, dst_out, mapping, from_ns, to_ns],
     )
     if p.wait() != 0:
         exit(1)
     return dst_out
+
 
 def map_mojang(version_id: str, target: str):
     return map_jar_with_tiny(
         f"{version_id}-{target}-moj-mapped.jar",
         get_piston_file(version_id, target),
         get_mojang_tiny(version_id, target),
-
         # Not sure why, but mojang has these two in the wrong order?
         "target",
-        "source"
+        "source",
     )
-def map_yarn(version_id : str, target : str): 
+
+
+def map_yarn(version_id: str, target: str):
     tiny = get_most_recent_yarn(version_id)
     if tiny is None:
         raise RuntimeError("Could not find yarn for version: " + version_id)
@@ -326,9 +346,70 @@ def map_yarn(version_id : str, target : str):
     return map_jar_with_tiny(
         f"{version_id}-{target}-yarn-mapped.jar",
         get_piston_file(version_id, target),
-        tiny
+        tiny,
     )
 
+import argparse
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Gryla: Minecraft JAR Downloader & Remapper"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # Subcommand: get (raw download)
+    get_parser = subparsers.add_parser("get", help="Download a vanilla JAR")
+    get_parser.add_argument(
+        "version", help="Minecraft Version (e.g. 1.20.1 or @omni@b1.7.3)"
+    )
+    parser.add_argument(
+        "side",
+        choices=["client", "server"],
+        nargs="?",
+        default="client",
+        help="Side (client or server, default: client)",
+    )
+    get_parser.add_argument("-o", "--output", help="Output file path")
 
+    # Subcommand: remap
+    remap_parser = subparsers.add_parser(
+        "remap", help="Download and remap a JAR to named mappings"
+    )
+    remap_parser.add_argument(
+        "version", help="Minecraft Version (e.g. 1.20.1 or @omni@b1.7.3)"
+    )
+    parser.add_argument(
+        "-m",
+        "--mappings",
+        choices=["yarn", "mojang"],
+        default="yarn",
+        help="Mappings type (default: yarn)",
+    )
+    remap_parser.add_argument("-o", "--output", help="Output file path")
 
+    args = parser.parse_args()
+
+    try:
+        result_path = None
+
+        if args.command == "get":
+            result_path = get_piston_file(args.version, args.side)
+
+        elif args.command == "remap":
+            if args.mappings == "yarn":
+                result_path = map_yarn(args.version, args.side)
+            elif args.mappings == "mojang":
+                result_path = map_mojang(args.version, args.side)
+
+        if result_path:
+            output_dest = args.output or os.path.basename(result_path)
+            # Check if output is a directory
+            if os.path.isdir(output_dest):
+                output_dest = os.path.join(output_dest, os.path.basename(result_path))
+
+            print(f"Copying result to: {output_dest}")
+            shutil.copyfile(result_path, output_dest)
+            print("Done.")
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)

@@ -26,14 +26,17 @@ import functools
 import subprocess
 from typing import cast
 from urllib3 import request
-from os.path import exists, join
+from os.path import dirname, exists, join
 import xml.etree.ElementTree as ET
 import os, shutil, sys
 import platform
 
+
+from tempfile import mktemp
+
 CFR_URL = "https://www.benf.org/other/cfr/cfr-0.152.jar"
 REMAPPER_URL = "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.11.2/tiny-remapper-0.11.2-fat.jar"
-
+SPECIAL_SOURCE2_URL = "https://hub.spigotmc.org/stash/projects/SPIGOT/repos/builddata/raw/bin/SpecialSource-2.jar?at=refs%2Fheads%2Fmaster"
 
 VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest.json"
 # Has more than the regular mojang manifest
@@ -76,6 +79,35 @@ def get_storage_dir() -> str:
 
 STORAGE_DIR = get_storage_dir()
 os.makedirs(STORAGE_DIR, exist_ok=True)
+
+
+def get_spigot_build_data_path() -> str:
+    data_path = join(STORAGE_DIR, "spigot_build_data")
+    inner_path = join(data_path, "BuildData")
+
+    if not exists(inner_path):
+        os.makedirs(data_path)
+
+        subprocess.check_call(
+            [
+                "git",
+                "clone",
+                "https://hub.spigotmc.org/stash/scm/spigot/builddata.git",
+                inner_path,
+            ]
+        )
+    return inner_path
+
+
+def set_build_data(commit: str):
+    data = get_spigot_build_data_path()
+    subprocess.check_call(
+        ["git", "checkout", commit],
+        cwd=data,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return data
 
 
 def sizeof_fmt(num, suffix="B"):
@@ -160,7 +192,11 @@ def download_cached(url: str, file_name: str) -> str:
 CRF = download_cached(CFR_URL, "cfr.jar")
 REMAPPER = download_cached(REMAPPER_URL, "remapper.jar")
 VERSION_MANIFEST = download_cached(VERSION_MANIFEST_URL, "version_manifest.json")
-OMNI_VERSION_MANIFEST = download_cached(OMNI_VERSION_MANIFEST_URL, "omni_version_manifest.json")
+OMNI_VERSION_MANIFEST = download_cached(
+    OMNI_VERSION_MANIFEST_URL, "omni_version_manifest.json"
+)
+
+SPECIAL_SOURCE2 = download_cached(SPECIAL_SOURCE2_URL, "SpecialSource-2.jar")
 
 
 def _get_yarn_versions(url: str) -> list[str]:
@@ -196,10 +232,12 @@ def get_piston_json_path(version_id: str):
 
     is_omni = False
     if version_id.startswith("@omni@"):
-        is_omni=True
-        version_id = version_id[len("@omni@"):]
+        is_omni = True
+        version_id = version_id[len("@omni@") :]
 
-    versions = json.load(open(OMNI_VERSION_MANIFEST if is_omni else VERSION_MANIFEST))["versions"]
+    versions = json.load(open(OMNI_VERSION_MANIFEST if is_omni else VERSION_MANIFEST))[
+        "versions"
+    ]
     version = None
     for v in versions:
         if v["id"] == version_id:
@@ -227,7 +265,7 @@ def get_piston_file(version_id: str, target: str) -> str:
         downloads = json.load(f)["downloads"]
 
     if target.startswith("@omni@"):
-        target = target[len("@omni@"):]
+        target = target[len("@omni@") :]
     if not target in downloads:
         raise IndexError(f"Unable to find '{target}' in {', '.join(downloads.keys())}")
     url = downloads[target]["url"]
@@ -329,6 +367,37 @@ def map_jar_with_tiny(
     return dst_out
 
 
+def map_ss_jar(
+    input_jar: str,
+    input_mappings: str,
+    dst_jar: str,
+    exclude: None | str = None,
+    auto_lvt: bool = False,
+):
+
+    subprocess.check_call(
+        ["java", "-jar", SPECIAL_SOURCE2, "map"]
+        + (["--auto-lvt", "BASIC"] if auto_lvt else [])
+        + (["-e", exclude] if exclude is not None else [])
+        + ["-i", input_jar, "-m", input_mappings, "-o", dst_jar],
+    )
+
+    return dst_jar
+
+
+# This function is EVIL. Theoretically this should be run in a container, but I don't really care
+def run_spigot_map_command(data_dir, cmd, *args):
+    # Attempt to sanatize command
+    assert cmd.startswith("java -jar BuildData/bin/SpecialSource-2.jar")
+
+    cmd = cmd.strip().replace("  ", " ").split(" ")
+    cmd = [seg if not seg[0] == "{" else args[int(seg[1])] for seg in cmd]
+
+    print("Running map command:", " ".join(cmd))
+
+    subprocess.check_call(cmd, cwd=dirname(data_dir))
+
+
 def map_mojang(version_id: str, target: str):
     return map_jar_with_tiny(
         f"{version_id}-{target}-moj-mapped.jar",
@@ -351,7 +420,97 @@ def map_yarn(version_id: str, target: str):
         tiny,
     )
 
+
+# Returns {VERSION.json: URL, ...}
+def get_spigot_versions() -> dict[str, str]:
+    spigot = download_cached(
+        "https://hub.spigotmc.org/versions/", "spigot_versions.htm"
+    )
+    with open(spigot, "r") as f:
+        lines = f.read().splitlines()
+
+    files = [
+        # Ex: <a href="1.10.2.json">1.10.2.json</a>
+        line.split('"')[1]
+        for line in lines
+        if line.startswith("<a ")
+    ]
+
+    return {
+        version: "https://hub.spigotmc.org/versions/" + version for version in files
+    }
+
+
+def map_spigot(spigot_version_id: str, force_piston_server: bool = False):
+    key = sha256(
+        f"MAP SPIGOT: {(spigot_version_id, force_piston_server)}".encode("utf-8")
+    ).hexdigest()
+
+    if out_path := get_cached_file(key):
+        return out_path
+    out_path = make_cache_file(key, "spigot_mapped.jar")
+
+
+    versions = get_spigot_versions()
+
+    assert spigot_version_id + ".json" in versions, "Invalid spigot version"
+
+
+    initial_json_name = spigot_version_id + ".json"
+    url = versions[initial_json_name]
+
+    with open(download_cached(url, initial_json_name), "r") as f:
+        ref = json.load(f)["refs"]["BuildData"]
+
+    data_path = set_build_data(ref)
+
+    with open(join(data_path, "info.json")) as f:
+        info_json = json.load(f)
+
+    if "serverUrl" in info_json and not force_piston_server:
+        server_jar = download_cached(info_json["serverUrl"], "server.jar")
+    else:
+        server_jar = get_piston_file(info_json["minecraftVersion"], "server")
+        # TODO: ADD TEST FOR MOJMAP MAPPINGS
+
+    # Until 1.13.2, you must map yourself
+    if 84 > info_json.get("toolsVersion", 0):
+        class_mapped = map_ss_jar(
+            server_jar,
+            join(data_path, "mappings", info_json["classMappings"]),
+            mktemp(".jar")
+        )
+        _ = map_ss_jar(
+            class_mapped,
+            join(data_path, "mappings", info_json["memberMappings"]),
+            out_path
+        )
+        os.remove(class_mapped)
+        return out_path 
+    else:
+        class_mapped = mktemp(".jar")
+        run_spigot_map_command(
+            data_path,
+            info_json["classMapCommand"],
+            server_jar,
+            join(data_path, "mappings", info_json["classMappings"]),
+            class_mapped,
+        )
+
+        run_spigot_map_command(
+            data_path,
+            info_json["memberMapCommand"],
+            class_mapped,
+            join(data_path, "mappings", info_json["memberMappings"]),
+            out_path,
+        )
+        os.remove(class_mapped)
+        return out_path 
+
+
 import argparse
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Gryla: Minecraft JAR Downloader & Remapper"

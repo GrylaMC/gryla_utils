@@ -127,7 +127,8 @@ def get_cached_file(cache_key: str) -> None | str:
     cache_dir = join(STORAGE_DIR, cache_key)
     if exists(cache_dir):
         listing = os.listdir(cache_dir)
-        assert len(listing) == 1, "Cache file not initiallized correctly"
+        if len(listing) == 0:
+            return None
 
         return join(cache_dir, listing[0])
     return None
@@ -136,9 +137,10 @@ def get_cached_file(cache_key: str) -> None | str:
 def make_cache_file(cache_key: str, name: str) -> str:
     cache_dir = join(STORAGE_DIR, cache_key)
 
-    assert not exists(cache_dir)
+    assert not exists(cache_dir) or len(os.listdir(cache_dir)) == 0
 
-    os.mkdir(cache_dir)
+    if not exists(cache_dir):
+        os.mkdir(cache_dir)
 
     return join(cache_dir, name)
 

@@ -19,7 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import requests, json, os
-from wikiMiner import *
+from wiki_miner import *
 from bs4 import BeautifulSoup
 
 

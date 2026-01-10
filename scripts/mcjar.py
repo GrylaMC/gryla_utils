@@ -3,7 +3,7 @@
 A general purpose util for getting and deobfuscating Minecraft
 jar files.
 
-Copyright (C) 2025 - PsychedelicPalimpsest
+Copyright (C) 2025 - 2026 - PsychedelicPalimpsest
 
 
 This program is free software: you can redistribute it and/or modify
@@ -20,10 +20,10 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-from hashlib import sha256
+from hashlib import sha1
 import json
-import functools
 import subprocess
+from zipfile import ZipFile
 from typing import cast
 from urllib3 import request
 from os.path import dirname, exists, join
@@ -178,7 +178,7 @@ def make_cache_file(cache_key: str, name: str) -> str:
 
 
 def download_cached(url: str, file_name: str) -> str:
-    cache_key = sha256(url.encode("utf-8")).hexdigest()
+    cache_key = sha1(url.encode("utf-8")).hexdigest()
 
     if path := get_cached_file(cache_key):
         return path
@@ -200,7 +200,7 @@ SPECIAL_SOURCE2 = download_cached(SPECIAL_SOURCE2_URL, "SpecialSource-2.jar")
 
 
 def _get_yarn_versions(url: str) -> list[str]:
-    cache_key = sha256(url.encode("utf-8")).hexdigest()
+    cache_key = sha1(url.encode("utf-8")).hexdigest()
 
     if path := get_cached_file(cache_key):
         return json.load(open(path))
@@ -226,7 +226,7 @@ def get_legacy_yarn_versions() -> list[str]:
 
 
 def get_piston_json_path(version_id: str):
-    cache_key = sha256(f"PISTON MANIFEST: '{version_id}'".encode("utf-8")).hexdigest()
+    cache_key = sha1(f"PISTON MANIFEST: '{version_id}'".encode("utf-8")).hexdigest()
     if path := get_cached_file(cache_key):
         return path
 
@@ -257,7 +257,7 @@ def get_piston_json_path(version_id: str):
 
 
 def get_piston_file(version_id: str, target: str) -> str:
-    cache_key = sha256(f"PISTON: '{version_id}' : {target}".encode("utf-8")).hexdigest()
+    cache_key = sha1(f"PISTON: '{version_id}' : {target}".encode("utf-8")).hexdigest()
     if path := get_cached_file(cache_key):
         return path
 
@@ -296,7 +296,7 @@ def get_most_recent_yarn_url(version_id: str) -> None | str:
 
 
 def get_most_recent_yarn(version_id: str) -> None | str:
-    key = sha256(f"YARN MAPPING: {version_id}".encode("utf-8")).hexdigest()
+    key = sha1(f"YARN MAPPING: {version_id}".encode("utf-8")).hexdigest()
 
     if path := get_cached_file(key):
         return path
@@ -314,9 +314,7 @@ def get_mojang_txt(version_id: str, target: str) -> str:
 
 
 def get_mojang_tiny(version_id: str, target: str) -> str:
-    key = sha256(
-        f"MOJANG TINY: '{version_id}' : '{target}'".encode("utf-8")
-    ).hexdigest()
+    key = sha1(f"MOJANG TINY: '{version_id}' : '{target}'".encode("utf-8")).hexdigest()
 
     if path := get_cached_file(key):
         return path
@@ -348,8 +346,9 @@ def map_jar_with_tiny(
     mapping: str,
     from_ns="official",
     to_ns="named",
+    ignore_conflicts=False,
 ):
-    key = sha256(
+    key = sha1(
         f"MAP_TINY: {(dst_jar_file_name, src_jar, mapping, from_ns, to_ns)}".encode(
             "utf-8"
         )
@@ -360,7 +359,8 @@ def map_jar_with_tiny(
     dst_out = make_cache_file(key, dst_jar_file_name)
 
     p = subprocess.Popen(
-        ["java", "-jar", REMAPPER, src_jar, dst_out, mapping, from_ns, to_ns],
+        ["java", "-jar", REMAPPER, src_jar, dst_out, mapping, from_ns, to_ns]
+        + ([] if not ignore_conflicts else ["--ignoreconflicts"]),
     )
     if p.wait() != 0:
         exit(1)
@@ -388,7 +388,7 @@ def map_ss_jar(
 # This function is EVIL. Theoretically this should be run in a container, but I don't really care
 def run_spigot_map_command(data_dir, cmd, *args):
     # Attempt to sanatize command
-    assert cmd.startswith("java -jar BuildData/bin/SpecialSource-2.jar")
+    assert cmd.startswith("java -jar BuildData/bin/SpecialSource")
 
     cmd = cmd.strip().replace("  ", " ").split(" ")
     cmd = [seg if not seg[0] == "{" else args[int(seg[1])] for seg in cmd]
@@ -441,20 +441,18 @@ def get_spigot_versions() -> dict[str, str]:
     }
 
 
-def map_spigot(spigot_version_id: str, force_piston_server: bool = False):
-    key = sha256(
-        f"MAP SPIGOT: {(spigot_version_id, force_piston_server)}".encode("utf-8")
+def map_spigot(spigot_version_id: str, force_piston_server_file: bool = False):
+    key = sha1(
+        f"MAP SPIGOT: {(spigot_version_id, force_piston_server_file)}".encode("utf-8")
     ).hexdigest()
 
     if out_path := get_cached_file(key):
         return out_path
     out_path = make_cache_file(key, "spigot_mapped.jar")
 
-
     versions = get_spigot_versions()
 
     assert spigot_version_id + ".json" in versions, "Invalid spigot version"
-
 
     initial_json_name = spigot_version_id + ".json"
     url = versions[initial_json_name]
@@ -467,49 +465,147 @@ def map_spigot(spigot_version_id: str, force_piston_server: bool = False):
     with open(join(data_path, "info.json")) as f:
         info_json = json.load(f)
 
-    if "serverUrl" in info_json and not force_piston_server:
+    if "serverUrl" in info_json and not force_piston_server_file:
         server_jar = download_cached(info_json["serverUrl"], "server.jar")
     else:
         server_jar = get_piston_file(info_json["minecraftVersion"], "server")
-        # TODO: ADD TEST FOR MOJMAP MAPPINGS
 
     # Until 1.13.2, you must map yourself
     if 84 > info_json.get("toolsVersion", 0):
         class_mapped = map_ss_jar(
             server_jar,
             join(data_path, "mappings", info_json["classMappings"]),
-            mktemp(".jar")
+            mktemp(".jar"),
         )
         _ = map_ss_jar(
-            class_mapped,
-            join(data_path, "mappings", info_json["memberMappings"]),
-            out_path
-        )
-        os.remove(class_mapped)
-        return out_path 
-    else:
-        class_mapped = mktemp(".jar")
-        run_spigot_map_command(
-            data_path,
-            info_json["classMapCommand"],
-            server_jar,
-            join(data_path, "mappings", info_json["classMappings"]),
-            class_mapped,
-        )
-
-        run_spigot_map_command(
-            data_path,
-            info_json["memberMapCommand"],
             class_mapped,
             join(data_path, "mappings", info_json["memberMappings"]),
             out_path,
         )
         os.remove(class_mapped)
-        return out_path 
+        return out_path
+    else:
+        class_mapped = mktemp(".jar")
+        run_spigot_map_command(
+            data_path,
+            info_json["classMapCommand"],
+            server_jar, # In
+            join(data_path, "mappings", info_json["classMappings"]),
+            class_mapped, # Out
+        )
+
+        if "memberMappings" in info_json:
+            run_spigot_map_command(
+                data_path,
+                info_json["memberMapCommand"],
+                class_mapped, # In
+                join(data_path, "mappings", info_json["memberMappings"]),
+                out_path,  # Out
+            )
+            os.remove(class_mapped)
+        else:
+            print("Warning: This version lacks member mappings! Meaning fields and methods cannot be remapped!", file=sys.stderr)
+            shutil.move(class_mapped, out_path)
+
+
+        if "finalMapCommand" in info_json:
+            final_mapped = mktemp(".jar")
+            run_spigot_map_command(
+                data_path,
+                info_json["finalMapCommand"],
+                out_path, # Ina
+                join(data_path, "mappings", info_json["accessTransforms"]),
+                join(data_path, "mappings", info_json["classMappings"]),
+                final_mapped, # Out
+            )
+            shutil.move(final_mapped, out_path)
+        return out_path
+
+
+def get_retromcp_versions() -> list[dict]:
+    with open(
+        download_cached(
+            "https://mcphackers.org/versionsV3/versions.json", "versions.json"
+        )
+    ) as f:
+        return json.load(f)
+
+
+def get_retromcp_version(version_id: str):
+    found_version = None
+    for version in get_retromcp_versions():
+        if version_id == version["id"]:
+            found_version = version
+            break
+    if found_version is None:
+        raise IndexError(f"Could not find version {version_id} in RetroMCP")
+
+    return found_version
+
+
+def get_retromcp_mapping_from_zip(zip_file: str) -> str:
+    key = sha1(f"RETROMCP ZIP: {zip_file}".encode("utf-8")).hexdigest()
+
+    if path := get_cached_file(key):
+        return path
+
+    with ZipFile(zip_file, "r") as zp:
+        mappings = make_cache_file(key, "mappings.tiny")
+        zp.extract("mappings.tiny", dirname(mappings))
+        return mappings
+
+def get_tiny2_namespaces(tiny_file : str) -> list[str]:
+    with open(tiny_file, 'r') as f:
+        return [ns.rstrip() for ns in f.readlines()[0].split('\t')[3:]]
+
+def map_retromcp(
+    version_id: str,
+    target: str,
+
+    from_ns=None,
+    to_ns=None,
+) -> str:
+    found_version = get_retromcp_version(version_id)
+    rzip = download_cached(found_version["resources"], "resources.zip")
+    version_json = json.load(open(download_cached(found_version["url"], "client.json")))
+
+    if not target in version_json["downloads"]:
+        raise IndexError(
+            f"Could not find target: '{target}' in {version_id}, options are: {', '.join(version_json['downloads'].keys())}"
+        )
+
+    jar_download = version_json["downloads"][target]["url"]
+    jar_fname = jar_download.split("/")[-1]
+    jar = download_cached(jar_download, jar_fname)
+    
+    tiny = get_retromcp_mapping_from_zip(rzip)
+
+    namespaces = get_tiny2_namespaces(tiny)
+
+    if from_ns is None:
+        from_ns = "official" if 'official' in namespaces else target
+    if not from_ns in namespaces:
+        raise ValueError(f"Namespace '{from_ns}' not found, options: {', '.join(namespaces)}")
+
+    if to_ns is None:
+        to_ns = "named"
+    if not to_ns in namespaces:
+        raise ValueError(f"Namespace '{to_ns}' not found, options: {', '.join(namespaces)}")
+
+
+    return map_jar_with_tiny(
+        "mapped-" + jar_fname,
+        jar,
+        tiny,
+        from_ns=from_ns,
+        to_ns=to_ns,
+        ignore_conflicts=True,
+    )
+
+
 
 
 import argparse
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -541,7 +637,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-m",
         "--mappings",
-        choices=["yarn", "mojang"],
+        choices=["yarn", "mojang", "spigot", "retromcp"],
         default="yarn",
         help="Mappings type (default: yarn)",
     )
@@ -549,28 +645,29 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    try:
-        result_path = None
+    result_path = None
 
-        if args.command == "get":
-            result_path = get_piston_file(args.version, args.side)
+    if args.command == "get":
+        result_path = get_piston_file(args.version, args.side)
 
-        elif args.command == "remap":
-            if args.mappings == "yarn":
-                result_path = map_yarn(args.version, args.side)
-            elif args.mappings == "mojang":
-                result_path = map_mojang(args.version, args.side)
+    elif args.command == "remap":
+        if args.mappings == "yarn":
+            result_path = map_yarn(args.version, args.side)
+        elif args.mappings == "mojang":
+            result_path = map_mojang(args.version, args.side)
+        elif args.mappings == "spigot":
+            result_path = map_spigot(args.version)
+        elif args.mappings == "retromcp":
+            result_path = map_retromcp(args.version, args.side)
+    if result_path:
+        output_dest = args.output or os.path.basename(result_path)
+        # Check if output is a directory
+        if os.path.isdir(output_dest):
+            output_dest = os.path.join(output_dest, os.path.basename(result_path))
 
-        if result_path:
-            output_dest = args.output or os.path.basename(result_path)
-            # Check if output is a directory
-            if os.path.isdir(output_dest):
-                output_dest = os.path.join(output_dest, os.path.basename(result_path))
+        print(f"Copying result to: {output_dest}")
+        shutil.copyfile(result_path, output_dest)
+        print("Done.")
 
-            print(f"Copying result to: {output_dest}")
-            shutil.copyfile(result_path, output_dest)
-            print("Done.")
 
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+

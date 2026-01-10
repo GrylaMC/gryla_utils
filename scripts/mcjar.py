@@ -33,7 +33,7 @@ OMNI_VERSION_MANIFEST_URL = "https://meta.omniarchive.uk/v1/manifest.json"
 YARN_FABRIC_BASE = "https://maven.fabricmc.net/net/fabricmc/yarn/"
 YARN_LEGACY_BASE = "https://repo.legacyfabric.net/legacyfabric/net/legacyfabric/yarn/"
 
-MAPPINGIO_URL = "https://cdn.githubraw.com/GrylaMC/gryla_utils/main/deps/mapping-io-cli-0.3.0-all.jar"
+MAPPINGIO_URL = "https://raw.githubusercontent.com/GrylaMC/gryla_utils/main/deps/mapping-io-cli-0.3.0-all.jar"
 
 # Initialize HTTP Pool
 http = urllib3.PoolManager()

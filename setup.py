@@ -12,7 +12,7 @@ if os.path.exists(readme_path):
 
 setup(
     name="mcjar",
-    version="0.0.2",
+    version="0.0.3",
     py_modules=["mcjar"],
     package_dir={"": "scripts"},
     packages=[],

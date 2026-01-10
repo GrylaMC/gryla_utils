@@ -3,3 +3,9 @@
 *.wiki
 .env
 
+
+dist/
+build/
+*/*.egg-*
+
+

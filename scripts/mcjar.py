@@ -33,11 +33,7 @@ OMNI_VERSION_MANIFEST_URL = "https://meta.omniarchive.uk/v1/manifest.json"
 YARN_FABRIC_BASE = "https://maven.fabricmc.net/net/fabricmc/yarn/"
 YARN_LEGACY_BASE = "https://repo.legacyfabric.net/legacyfabric/net/legacyfabric/yarn/"
 
-MAPPINGIO = join(
-    dirname(dirname(abspath(__file__))),
-    "deps",
-    "mapping-io-cli-0.3.0-all.jar",
-)
+MAPPINGIO_URL = "https://cdn.githubraw.com/GrylaMC/gryla_utils/main/deps/mapping-io-cli-0.3.0-all.jar"
 
 # Initialize HTTP Pool
 http = urllib3.PoolManager()
@@ -187,6 +183,8 @@ OMNI_VERSION_MANIFEST = download_cached(
     OMNI_VERSION_MANIFEST_URL, "omni_version_manifest.json"
 )
 SPECIAL_SOURCE2 = download_cached(SPECIAL_SOURCE2_URL, "SpecialSource-2.jar")
+
+MAPPINGIO = download_cached(MAPPINGIO_URL, "mapping-io-cli.jar")
 
 
 def _get_yarn_versions(url: str) -> List[str]:
@@ -624,8 +622,7 @@ def clear_gryla_cache():
 
 
 # --- MAIN ---
-
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(
         description="Gryla McJar.py: Minecraft JAR Downloader & Remapper"
     )
@@ -707,3 +704,8 @@ if __name__ == "__main__":
     except Exception as ex:
         print(f"Error: {ex}", file=sys.stderr)
         sys.exit(1)
+
+
+
+if __name__ == "__main__":
+    main()

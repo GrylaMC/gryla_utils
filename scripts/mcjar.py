@@ -617,6 +617,12 @@ def map_retromcp(
     )
 
 
+
+
+def clear_gryla_cache():
+    shutil.rmtree(STORAGE_DIR)
+
+
 # --- MAIN ---
 
 if __name__ == "__main__":
@@ -624,6 +630,9 @@ if __name__ == "__main__":
         description="Gryla McJar.py: Minecraft JAR Downloader & Remapper"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    _ = subparsers.add_parser("clear_cache", help="Clear the Gryla cache")
+
 
     # Subcommand: get (raw download)
     get_parser = subparsers.add_parser("get", help="Download a vanilla JAR")
@@ -666,8 +675,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     result_path = None
-    
+    if args.command == "clear_cache":
+        clear_gryla_cache()   
+        sys.exit(0)
     try:
+
         if args.command == "get":
             result_path = get_piston_file(args.version, args.side)
 
